@@ -1,0 +1,36 @@
+# Ignore Go build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Ignore vendor directory if you use modules
+/vendor
+
+# Ignore Go module files (optional if you want to copy them)
+# go.mod
+# go.sum
+
+# Ignore editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.idea
+*.vscode
+*.log
+
+# Ignore node_modules if you have any frontend parts
+node_modules
+
+# Ignore Dockerfile itself and docker-compose (optional)
+Dockerfile
+docker-compose.yml
+
+# Ignore temporary files
+*.tmp
+*.bak
+*.old
