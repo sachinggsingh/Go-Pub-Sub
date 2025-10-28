@@ -1,0 +1,3 @@
+Aim :
+
+When a file is uploaded, the server publishes a message to a Redis Pub/Sub channel, and if the client is online and connected via a WebSocket, they instantly receive a notification that the upload succeeded through the WebSocket, powered by the Pub/Sub event
