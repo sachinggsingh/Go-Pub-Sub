@@ -2,12 +2,13 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/cloudinary/cloudinary-go/api/uploader"
 	"github.com/gin-gonic/gin"
-	"github.com/sachinggsingh/notify/internal/config"
+	config "github.com/sachinggsingh/notify/internal/config"
 	database "github.com/sachinggsingh/notify/internal/db"
 	"github.com/sachinggsingh/notify/internal/models"
 	"go.mongodb.org/mongo-driver/bson"
@@ -65,6 +66,25 @@ func UploadFile() gin.HandlerFunc {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save upload details"})
 			return
 		}
+
+		go func() {
+			genCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			caption, err := config.GenerateCaption(genCtx, imageDoc.URL)
+
+			if err != nil {
+				caption = "A new file has been uploaded"
+			}
+			msg := models.Message{
+				UserID:    c.PostForm("user_id"), // if user_id is submitted in the form
+				Content:   caption,
+				Timestamp: time.Now(),
+			}
+			// store message in DB and publish to Redis so subscribers receive it
+			_, _ = messageCollection.InsertOne(genCtx, msg) // messageCollection is in package controllers (pub_sub_controller.go)
+			data, _ := json.Marshal(msg)
+			_ = config.RDB.Publish(genCtx, "message", data).Err()
+		}()
 
 		c.JSON(http.StatusOK, gin.H{
 			"message": "File uploaded successfully",

@@ -50,41 +50,44 @@ func main() {
 
 	fmt.Println("Login Successfully ", token[:20]+"...")
 
-	fmt.Println("=== Step 2: Upload an image (protected) ===")
-	img, upErr := uploadImage(baseURl, token)
-	if upErr != nil {
-		log.Printf("Upload failed: %v\n", upErr)
-	} else {
-		log.Printf("Upload succeeded: id=%s url=%s\n", img.ImageID, img.URL)
+	fmt.Println("=== Step 2: Connect WebSocket and then upload an image ===")
+	// Channel to detect at least one message arrival
+	received := make(chan struct{}, 1)
+
+	// Connect to WS first so we can see the generated caption message broadcast
+	onConnect := func() {
+		log.Println("WS connected: triggering image upload to generate caption...")
+		img, upErr := uploadImage(baseURl, token)
+		if upErr != nil {
+			log.Printf("Upload failed: %v\n", upErr)
+		} else {
+			log.Printf("Upload succeeded: id=%s url=%s\n", img.ImageID, img.URL)
+		}
+		// Also publish a quick test message to ensure WS output even if caption is slow
+		if err := publishMessage(baseURl, token, "demo-user", "quick test message over WS"); err != nil {
+			log.Printf("Quick publish failed: %v\n", err)
+		}
 	}
 
-	fmt.Println("=== Step 3: Testing REST API Endpoints ===")
-	// Test publish (protected)
+	// Connect to WS and listen longer to allow caption/test message to arrive
+	if err := testWebSocket("ws://localhost:8080/protected/ws", token, 45*time.Second, onConnect, received); err != nil {
+		log.Printf("WebSocket test failed: %v\n", err)
+	} else {
+		log.Println("WebSocket test completed")
+	}
+
+	select {
+	case <-received:
+		fmt.Println("Test successful: received message via WebSocket")
+	default:
+		fmt.Println("Test incomplete: no WebSocket message received in time")
+	}
+
+	fmt.Println("=== Step 3: Testing REST API publish (optional) ===")
 	if err := publishMessage(baseURl, token, "demo-user", "Hello from test client"); err != nil {
 		log.Printf("Publish failed: %v\n", err)
 	} else {
 		log.Println("Publish succeeded")
-	}
-
-	fmt.Println("=== Step 4: Testing WebSocket pub/sub ===")
-	// Connect to WS and, once connected, publish a message referencing the uploaded image
-	onConnect := func() {
-		content := "WS publish after upload"
-		if img.ImageID != "" {
-			content = fmt.Sprintf("WS publish after upload image_id=%s", img.ImageID)
-		}
-		if err := publishMessage(baseURl, token, "demo-user", content); err != nil {
-			log.Printf("Publish (during WS) failed: %v\n", err)
-		} else {
-			log.Println("Publish (during WS) succeeded")
-		}
-	}
-
-	// Connect to WS and listen briefly
-	if err := testWebSocket("ws://localhost:8080/protected/ws", token, 10*time.Second, onConnect); err != nil {
-		log.Printf("WebSocket test failed: %v\n", err)
-	} else {
-		log.Println("WebSocket test completed")
 	}
 }
 
@@ -155,7 +158,7 @@ func publishMessage(baseUrl, token, userID, content string) error {
 }
 
 // testWebSocket dials the WS endpoint with Authorization header and listens for messages for duration
-func testWebSocket(rawURL, token string, listenFor time.Duration, onConnected func()) error {
+func testWebSocket(rawURL, token string, listenFor time.Duration, onConnected func(), received chan struct{}) error {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("parse url: %w", err)
@@ -186,6 +189,11 @@ func testWebSocket(rawURL, token string, listenFor time.Duration, onConnected fu
 				return
 			}
 			log.Printf("recv: %s\n", message)
+			// Signal that at least one message was received
+			select {
+			case received <- struct{}{}:
+			default:
+			}
 		}
 	}()
 
@@ -204,6 +212,16 @@ func testWebSocket(rawURL, token string, listenFor time.Duration, onConnected fu
 }
 
 // uploadImage sends a multipart/form-data POST to /protected/upload with an in-memory tiny PNG
+type uploadAPIResponse struct {
+	Message string `json:"message"`
+	Data    struct {
+		ID       any    `json:"id"`
+		URL      string `json:"url"`
+		PublicID string `json:"public_id"`
+		ImageID  string `json:"image_id"`
+	} `json:"data"`
+}
+
 func uploadImage(baseUrl, token string) (ImageResponse, error) {
 	var result ImageResponse
 
@@ -248,9 +266,21 @@ func uploadImage(baseUrl, token string) (ImageResponse, error) {
 		return result, fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	// Parse response directly into our ImageResponse struct
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	// Decode API response shape and map into ImageResponse
+	var apiResp uploadAPIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		return result, fmt.Errorf("failed to decode response: %w", err)
+	}
+	// map fields
+	result.URL = apiResp.Data.URL
+	result.PublicID = apiResp.Data.PublicID
+	result.ImageID = apiResp.Data.ImageID
+	// best-effort string for ID
+	switch v := apiResp.Data.ID.(type) {
+	case string:
+		result.ID = v
+	default:
+		// ignore other shapes
 	}
 
 	return result, nil

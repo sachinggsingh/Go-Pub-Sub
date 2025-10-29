@@ -82,5 +82,12 @@ func StartRedisSubscriber(ctx context.Context) {
 			continue
 		}
 		log.Println("Message received and saved:", message)
+
+		// Broadcast to all connected WebSocket clients
+		if b, err := json.Marshal(message); err == nil {
+			config.HubInstance.Broadcast <- b
+		} else {
+			log.Println("Failed to marshal message for WS broadcast:", err)
+		}
 	}
 }
